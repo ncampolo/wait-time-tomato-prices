@@ -1,0 +1,59 @@
+library(data.table)
+
+# BUILD WEEKLY AVERAGE WAIT TIME FOR TOP 3 PORTS
+wait <- fread("/Users/nickcampolo/all_vars.csv")
+wait[, week_start_date := as.Date(Date)]
+wait[, week_start_date := date - as.integer(format(date, "%w"))]
+
+old_names <- names(wait_wide)[names(wait_wide) != "week_start_date"]
+setnames(wait_wide, old_names, port_names[old_names])
+wait_wide[, week_start_date := as.Date(week_start_date)]
+port_vars     <- unname(port_names)
+log_port_vars <- paste0("log_wait_", port_vars)
+
+# Log transform in hours (add 1/60 instead of 1 to keep scale consistent)
+
+for (v in port_vars) {
+  wait_wide[, paste0("log_wait_", v) := log(get(v) + 1)]
+}
+
+
+
+# Variance summary by port (in hours, pre-log)
+port_summary <- melt(
+  wait_wide,
+  id.vars = "week_start_date",
+  measure.vars = port_vars,   # "laredo", "nogales", "otay_mesa"
+  variable.name = "port",
+  value.name = "avg_wait_hr"
+)[, .(
+  mean_hr   = mean(avg_wait_hr, na.rm = TRUE),
+  sd_hr     = sd(avg_wait_hr, na.rm = TRUE),
+  cv        = sd(avg_wait_hr, na.rm = TRUE) / mean(avg_wait_hr, na.rm = TRUE),
+  min_hr    = min(avg_wait_hr, na.rm = TRUE),
+  max_hr    = max(avg_wait_hr, na.rm = TRUE),
+  n_weeks   = sum(!is.na(avg_wait_hr))
+), by = port]
+
+print(port_summary)
+
+# Add lags to wait_wide (same lags as in your feols model)
+wait_wide[order(week_start_date),
+          paste0("log_wait_", port_vars, "_lag2") := lapply(.SD, shift, n = 2),
+          .SDcols = log_port_vars
+]
+
+# Variance of the actual lagged log series used in regression
+lag2_summary <- melt(
+  wait_wide,
+  id.vars = "week_start_date",
+  measure.vars = paste0("log_wait_", port_vars, "_lag2"),
+  variable.name = "port_lag",
+  value.name = "log_wait_lag2"
+)[, .(
+  mean_log  = mean(log_wait_lag2, na.rm = TRUE),
+  sd_log    = sd(log_wait_lag2, na.rm = TRUE),
+  n_nonmiss = sum(!is.na(log_wait_lag2))
+), by = port_lag]
+
+print(lag2_summary)
