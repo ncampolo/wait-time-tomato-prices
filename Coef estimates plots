@@ -1,0 +1,389 @@
+
+library(fixest)
+library(data.table)
+
+# LOAD DATA 
+df <- fread("/Users/nickcampolo/all_vars.csv")
+df[, week_start_date := as.Date(week_start_date)]
+df <- df[!Region %in% c("NATIONAL", "HAWAII", "ALASKA")]
+
+# VARIETY FIXED EFFECT 
+df[, Variety_fe := trimws(Commodity)]
+
+df[, Variety_fe := fifelse(
+  !is.na(Variety) & Variety != "",
+  paste(Variety_fe, trimws(Variety), sep = "_"),
+  Variety_fe
+)]
+
+df[, Variety_fe := fifelse(
+  !is.na(Organic) & Organic != "",
+  paste(Variety_fe, trimws(Organic), sep = "_"),
+  Variety_fe
+)]
+
+df[, Variety_fe := fifelse(
+  !is.na(Environment) & Environment != "",
+  paste(Variety_fe, trimws(Environment), sep = "_"),
+  Variety_fe
+)]
+
+
+# WAIT TIME: CONVERT TO HOURS, THEN LOG TRANSFORM 
+df[, log_wait_nogales := log(avg_wait_nogales / 60 + 1)]
+df[, log_wait_otay    := log(avg_wait_otay    / 60 + 1)]
+df[, log_wait_laredo  := log(avg_wait_laredo  / 60 + 1)]
+
+# Convert precipitation to centimeters
+df[, precip_west_cm := precip_west / 100]
+df[, precip_east_cm := precip_east / 100]
+
+# Reduce temperature by factor of 10
+df[, temp_west_reduced := temp_west / 10]
+df[, temp_east_reduced := temp_east / 10]
+
+# WAIT TIME LAGS 
+df <- df[order(week_start_date, Region, Commodity, Variety)]
+
+df[, log_wait_nogales_L1 := data.table::shift(log_wait_nogales, n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+df[, log_wait_nogales_L2 := data.table::shift(log_wait_nogales, n = 2, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, log_wait_otay_L1    := data.table::shift(log_wait_otay,    n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+df[, log_wait_otay_L2    := data.table::shift(log_wait_otay,    n = 2, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, log_wait_laredo_L1  := data.table::shift(log_wait_laredo,  n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+df[, log_wait_laredo_L2  := data.table::shift(log_wait_laredo,  n = 2, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+
+# Weather Controls
+df[, extreme_weather_L12 := data.table::shift(extreme_weather, n = 12 , type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, precip_west_cm_L12 := data.table::shift(precip_west_cm, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, precip_east_cm_L12 := data.table::shift(precip_east_cm, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, temp_west_reduced_L12 := data.table::shift(temp_west_reduced, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, temp_east_reduced_L12 := data.table::shift(temp_east_reduced, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+weather_terms <- c("extreme_weather_L12", "precip_west_cm_L12", "precip_east_cm_L12",
+                   "temp_west_reduced_L12", "temp_east_reduced_L12")
+
+# Diesel
+df[, log_diesel := log(diesel_real)]
+df[, log_diesel_L1 := log_diesel - data.table::shift(log_diesel, n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+# EXCHANGE RATE: LOG, LAG 2
+df[, log_exchange_rate    := log(exchange_rate)]
+df[, log_exchange_rate_L1 := data.table::shift(log_exchange_rate, n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+# BUILD FORMULA 
+log_port_vars <- c("log_wait_nogales", "log_wait_otay", "log_wait_laredo")
+
+wait_terms <- paste(
+  c(paste0(log_port_vars, "_L1"),
+    paste0(log_port_vars, "_L2")),
+  collapse = " + "
+)
+
+weather_terms_str <- paste(weather_terms, collapse = " + ")
+
+fmla <- as.formula(paste(
+  "log(tomato_real) ~",
+  wait_terms, "+",
+  weather_terms_str, "+",
+  "log_diesel_L1 + log_exchange_rate_L1",
+  "| Region + Variety_fe + year + month"
+))
+
+# ESTIMATE 
+m <- feols(fmla, data = df, vcov = ~Region)
+
+# WAIT TIME PLOTS
+
+
+
+library(tidyverse)
+coefs  <- coef(m)
+ses    <- sqrt(diag(vcov(m)))
+s      <- summary(m)
+pvals  <- s$coeftable[, "Pr(>|t|)"]
+
+var_order <- c(
+  "log_wait_otay_L2",
+  "log_wait_otay_L1",
+  "log_wait_nogales_L2",
+  "log_wait_nogales_L1",
+  "log_wait_laredo_L2",
+  "log_wait_laredo_L1"
+)
+
+label_map <- c(
+  "log_wait_laredo_L1"    = "Laredo,\n1-week lag",
+  "log_wait_laredo_L2"    = "Laredo,\n2-week lag",
+  "log_wait_nogales_L1"   = "Nogales,\n1-week lag",
+  "log_wait_nogales_L2"   = "Nogales,\n2-week lag",
+  "log_wait_otay_L1" = "Otay Mesa,\n1-week lag",
+  "log_wait_otay_L2" = "Otay Mesa,\n2-week lag"
+  
+)
+
+coef_dt <- data.table(
+  var     = var_order,
+  est     = coefs[var_order],
+  se      = ses[var_order],
+  pval    = pvals[var_order]
+)
+
+coef_dt[, ci90_lo := est - qnorm(0.95) * se]
+coef_dt[, ci90_hi := est + qnorm(0.95) * se]
+coef_dt[, ci95_lo := est - qnorm(0.975) * se]
+coef_dt[, ci95_hi := est + qnorm(0.975) * se]
+coef_dt[, label   := factor(label_map[var], levels = label_map[var_order])]
+coef_dt[, sig95   := pval < 0.05]
+coef_dt[, sig90   := pval < 0.10]
+
+# BUILD PLOT
+
+p_w <- ggplot(coef_dt, aes(y = label, x = est)) +
+  
+  # Zero line
+  geom_vline(xintercept = 0, color = "grey40", linewidth = 0.4) +
+  
+  # 95% CI (thin)
+  geom_errorbarh(aes(xmin = ci95_lo, xmax = ci95_hi,
+                     color = sig95),
+                 height = 0, linewidth = 0.5) +
+  
+  # 90% CI (thick)
+  geom_errorbarh(aes(xmin = ci90_lo, xmax = ci90_hi,
+                     color = sig95),
+                 height = 0, linewidth = 1) +
+  
+  # Point estimate
+  geom_point(aes(color = sig95, shape = sig95), size = 2) +
+  
+  scale_color_manual(
+    values = c("TRUE" = "#2C4770", "FALSE" = "grey60"),
+    labels = c("TRUE" = "p < 0.05", "FALSE" = "p \u2265 0.05"),
+    name = NULL
+  ) +
+  scale_shape_manual(
+    values = c("TRUE" = 19, "FALSE" = 1),
+    labels = c("TRUE" = "p < 0.05", "FALSE" = "p \u2265 0.05"),
+    name = NULL
+  ) +
+  scale_x_continuous(
+    name   = "Coefficient Estimate\n(approximate % change in retail tomato price)",
+    expand = expansion(mult = c(0.05, 0.30))
+  ) +
+  scale_y_discrete(name = NULL) +
+  labs(title = "Wait Time (in hours) Regression Coefficients") +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(size = 12, hjust = 0.5),
+    axis.line.y     = element_blank(),
+    axis.ticks.y    = element_blank(),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
+    panel.grid.minor.x = element_blank(),
+    legend.position = c(0.88, 0.5)
+  )
+
+
+# SAVE AS PDF
+
+ggsave("/Users/nickcampolo/Desktop/wait_plot.pdf",
+       plot = p_w, width = 7, height = 5, device = cairo_pdf)
+
+
+# MAKE PLOT FOR WEATHER:
+
+# Variable ordering
+var_order <- c(
+  "precip_east_cm_L12",
+  "precip_west_cm_L12",
+  "temp_east_reduced_L12",
+  "temp_west_reduced_L12",
+  "extreme_weather_L12"
+)
+
+label_map <- c(
+  "precip_east_cm_L12" = "Precipitation (cm),\nEastern Growing Regions",
+  "precip_west_cm_L12" = "Precipitation (cm),\nWestern Growing Regions",
+  "temp_east_reduced_L12" = "Average Temperature (°C/10),\nEastern Growing Regions",
+  "temp_west_reduced_L12" = "Average Temperature (°C/10),\nWestern Growing Regions",
+  "extreme_weather_L12" = "Extreme Weather" 
+)
+
+coef_dt <- data.table(
+  var     = var_order,
+  est     = coefs[var_order],
+  se      = ses[var_order],
+  pval    = pvals[var_order]
+)
+
+coef_dt[, ci90_lo := est - qnorm(0.95) * se]
+coef_dt[, ci90_hi := est + qnorm(0.95) * se]
+coef_dt[, ci95_lo := est - qnorm(0.975) * se]
+coef_dt[, ci95_hi := est + qnorm(0.975) * se]
+coef_dt[, label   := factor(label_map[var], levels = label_map[var_order])]
+coef_dt[, sig95   := pval < 0.05]
+coef_dt[, sig90   := pval < 0.10]
+
+
+
+# BUILD PLOT
+
+
+p_wea <- ggplot(coef_dt, aes(y = label, x = est)) +
+  
+  # Zero line
+  geom_vline(xintercept = 0, color = "grey40", linewidth = 0.4) +
+  
+  coord_cartesian(xlim = c(-0.1, 0.05)) +
+  
+  # 95% CI (thin)
+  geom_errorbarh(aes(xmin = ci95_lo, xmax = ci95_hi,
+                     color = sig95),
+                 height = 0, linewidth = 0.5) +
+  
+  # 90% CI (thick)
+  geom_errorbarh(aes(xmin = ci90_lo, xmax = ci90_hi,
+                     color = sig95),
+                 height = 0, linewidth = 1) +
+  
+  # Point estimate
+  geom_point(aes(color = sig95, shape = sig95), size = 2) +
+  
+  scale_color_manual(
+    values = c("TRUE" = "#2C4770", "FALSE" = "grey60"),
+    labels = c("TRUE" = "p < 0.05", "FALSE" = "p \u2265 0.05"),
+    name = NULL
+  ) +
+  scale_shape_manual(
+    values = c("TRUE" = 19, "FALSE" = 1),
+    labels = c("TRUE" = "p < 0.05", "FALSE" = "p \u2265 0.05"),
+    name = NULL
+  ) +
+  scale_x_continuous(
+    name   = "Coefficient Estimate\n(approximate % change in retail tomato price)",
+    expand = expansion(mult = c(0.05, 0.30))
+  ) +
+  scale_y_discrete(name = NULL) +
+  
+  labs(title = "Coefficient Estimates of Weather Variables") +
+  
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(size = 12, hjust = 0.5),
+    axis.line.y     = element_blank(),
+    axis.ticks.y    = element_blank(),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
+    panel.grid.minor.x = element_blank(),
+    legend.position = c(0.88, 0.5)
+  )
+
+# SAVE AS PDF
+
+ggsave("/Users/nickcampolo/Desktop/weather_coefs_plot.pdf",
+       plot = p_wea, width = 7, height = 5, device = cairo_pdf)
+
+
+
+
+# MAKE PLOT FOR DIESEL AND EXCHANGE RATE
+
+var_order <- c(
+  "log_exchange_rate_L1",
+  "log_diesel_L1"
+)
+
+label_map <- c(
+  "log_exchange_rate_L1" = "MXN-USD Exchange Rate",
+  "log_diesel_L1" = "U.S. Diesel Price ($/gal)"
+)
+
+coef_dt <- data.table(
+  var     = var_order,
+  est     = coefs[var_order],
+  se      = ses[var_order],
+  pval    = pvals[var_order]
+)
+
+coef_dt[, ci90_lo := est - qnorm(0.95) * se]
+coef_dt[, ci90_hi := est + qnorm(0.95) * se]
+coef_dt[, ci95_lo := est - qnorm(0.975) * se]
+coef_dt[, ci95_hi := est + qnorm(0.975) * se]
+coef_dt[, label   := factor(label_map[var], levels = label_map[var_order])]
+coef_dt[, sig95   := pval < 0.05]
+coef_dt[, sig90   := pval < 0.10]
+
+
+
+# BUILD PLOT
+
+
+p_de <- ggplot(coef_dt, aes(y = label, x = est)) +
+  
+  # Zero line
+  geom_vline(xintercept = 0, color = "grey40", linewidth = 0.4) +
+  
+  # 95% CI (thin)
+  geom_errorbarh(aes(xmin = ci95_lo, xmax = ci95_hi,
+                     color = sig95),
+                 height = 0, linewidth = 0.5) +
+  
+  # 90% CI (thick)
+  geom_errorbarh(aes(xmin = ci90_lo, xmax = ci90_hi,
+                     color = sig95),
+                 height = 0, linewidth = 1) +
+  
+  # Point estimate
+  geom_point(aes(color = sig95, shape = sig95), size = 2) +
+  
+  scale_color_manual(
+    values = c("TRUE" = "#2C4770", "FALSE" = "grey60"),
+    labels = c("TRUE" = "p < 0.05", "FALSE" = "p \u2265 0.05"),
+    name = NULL
+  ) +
+  scale_shape_manual(
+    values = c("TRUE" = 19, "FALSE" = 1),
+    labels = c("TRUE" = "p < 0.05", "FALSE" = "p \u2265 0.05"),
+    name = NULL
+  ) +
+  scale_x_continuous(
+    name   = "Coefficient Estimate\n(approximate % change in retail tomato price)",
+    expand = expansion(mult = c(0.05, 0.30))
+  ) +
+  scale_y_discrete(name = NULL) +
+  
+  labs(title = "Coefficient Estimates of U.S. Diesel Price and MXN-USD Rate") +
+  
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(size = 12),
+    axis.line.y     = element_blank(),
+    axis.ticks.y    = element_blank(),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
+    panel.grid.minor.x = element_blank(),
+    legend.position = "none"
+  )
+
+# SAVE AS PDF
+
+ggsave("/Users/nickcampolo/Desktop/diesel_exch_plot.pdf",
+       plot = p_de, width = 7, height = 4, device = "pdf")
+
