@@ -1,0 +1,25 @@
+library(readxl)
+library(data.table)
+
+# ── READ AND CLEAN ─────────────────────────────────────────────────────────────
+diesel <- read_excel("/Users/nickcampolo/Downloads/psw18vwall.xls", sheet = "Data 1", skip = 2)
+setDT(diesel)
+
+# Keep only date and national average
+diesel <- diesel[, .(Date = as.Date(diesel[[1]]),
+                     diesel_nominal = diesel[[2]])]
+
+# ── FILTER TO STUDY PERIOD ────────────────────────────────────────────────────
+diesel <- diesel[Date >= as.Date("2007-10-05") & Date <= as.Date("2023-09-01")]
+
+# ── SNAP MONDAY DATES TO FRIDAY WEEK START ───────────────────────────────────
+diesel[, week_start_date := Date - 3]
+diesel[, Date := NULL]
+
+cat("Rows:", nrow(diesel), "\n")
+cat("Date range:", as.character(min(diesel$week_start_date)),
+    "to", as.character(max(diesel$week_start_date)), "\n")
+cat("NAs:", sum(is.na(diesel$diesel_nominal)), "\n")
+
+# ── SAVE ──────────────────────────────────────────────────────────────────────
+write.csv(diesel, "diesel_weekly_nominal.csv", row.names = FALSE)
