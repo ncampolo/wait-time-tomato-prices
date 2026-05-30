@@ -1,0 +1,129 @@
+
+library(fixest)
+library(data.table)
+
+# LOAD DATA 
+df <- fread("/Users/nickcampolo/all_vars.csv")
+df[, week_start_date := as.Date(week_start_date)]
+df <- df[!Region %in% c("NATIONAL", "HAWAII", "ALASKA")]
+
+
+# VARIETY FIXED EFFECT 
+df[, Variety_fe := trimws(Commodity)]
+
+df[, Variety_fe := fifelse(
+  !is.na(Variety) & Variety != "",
+  paste(Variety_fe, trimws(Variety), sep = "_"),
+  Variety_fe
+)]
+
+df[, Variety_fe := fifelse(
+  !is.na(Organic) & Organic != "",
+  paste(Variety_fe, trimws(Organic), sep = "_"),
+  Variety_fe
+)]
+
+df[, Variety_fe := fifelse(
+  !is.na(Environment) & Environment != "",
+  paste(Variety_fe, trimws(Environment), sep = "_"),
+  Variety_fe
+)]
+
+
+# WAIT TIME: CONVERT TO HOURS, THEN LOG TRANSFORM 
+df[, log_wait_nogales := log(avg_wait_nogales / 60 + 1)]
+df[, log_wait_otay    := log(avg_wait_otay    / 60 + 1)]
+df[, log_wait_laredo  := log(avg_wait_laredo  / 60 + 1)]
+
+# Convert precipitation to centimeters
+df[, precip_west_cm := precip_west / 100]
+df[, precip_east_cm := precip_east / 100]
+
+# Reduce temperature by factor of 10
+df[, temp_west_reduced := temp_west / 10]
+df[, temp_east_reduced := temp_east / 10]
+
+# WAIT TIME LAGS 
+df <- df[order(week_start_date, Region, Commodity, Variety)]
+
+df[, log_wait_nogales_L1 := data.table::shift(log_wait_nogales, n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+df[, log_wait_nogales_L2 := data.table::shift(log_wait_nogales, n = 2, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, log_wait_otay_L1    := data.table::shift(log_wait_otay,    n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+df[, log_wait_otay_L2    := data.table::shift(log_wait_otay,    n = 2, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, log_wait_laredo_L1  := data.table::shift(log_wait_laredo,  n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+df[, log_wait_laredo_L2  := data.table::shift(log_wait_laredo,  n = 2, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+
+# Weather Controls
+df[, extreme_weather_L12 := data.table::shift(extreme_weather, n = 12 , type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, precip_west_cm_L12 := data.table::shift(precip_west_cm, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, precip_east_cm_L12 := data.table::shift(precip_east_cm, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, temp_west_reduced_L12 := data.table::shift(temp_west_reduced, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+df[, temp_east_reduced_L12 := data.table::shift(temp_east_reduced, n = 12, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+weather_terms <- c("extreme_weather_L12", "precip_west_cm_L12", "precip_east_cm_L12",
+"temp_west_reduced_L12", "temp_east_reduced_L12")
+
+# Diesel
+df[, log_diesel := log(diesel_real)]
+df[, log_diesel_L1 := log_diesel - data.table::shift(log_diesel, n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+# EXCHANGE RATE: LOG, LAG 2
+df[, log_exchange_rate    := log(exchange_rate)]
+df[, log_exchange_rate_L1 := data.table::shift(log_exchange_rate, n = 1, type = "lag"),
+   by = .(Region, Variety_fe)]
+
+# BUILD FORMULA 
+log_port_vars <- c("log_wait_nogales", "log_wait_otay", "log_wait_laredo")
+
+wait_terms <- paste(
+  c(paste0(log_port_vars, "_L1"),
+    paste0(log_port_vars, "_L2")),
+  collapse = " + "
+)
+
+weather_terms_str <- paste(weather_terms, collapse = " + ")
+
+fmla <- as.formula(paste(
+  "log(tomato_real) ~",
+  wait_terms, "+",
+  weather_terms_str, "+",
+  "log_diesel_L1 + log_exchange_rate_L1",
+  "| Region + Variety_fe + year + month"
+))
+
+# ESTIMATE 
+m <- feols(fmla, data = df, vcov = ~Region)
+print(summary(m))
+
+
+# Get the varieties used in the regression
+# Using this to get table of varieties used in separate file
+df_reg <- df[!is.na(log(tomato_real)) &
+               !is.na(log_wait_nogales_L1) &
+               !is.na(log_wait_laredo_L1) &
+               !is.na(log_wait_otay_L1) &
+               !is.na(extreme_weather_L12) &
+               !is.na(log_diesel_L1) &
+               !is.na(log_exchange_rate_L1)]
+
+# Count by variety and see which ones have enough variation
+df_reg[, .N, by = Variety_fe][order(-N)]
