@@ -1,0 +1,106 @@
+library(nasapower)
+
+# REGION DEFINITIONS
+west_north <- list(xmin = -111.875, xmax = -105.0, ymin = 25.0, ymax = 27.0)
+west_south <- list(xmin = -111.875, xmax = -105.0, ymin = 22.5, ymax = 25.0)
+east_north <- list(xmin = -105.0,   xmax = -99.0,  ymin = 21.0, ymax = 24.0)
+east_south <- list(xmin = -105.0,   xmax = -99.0,  ymin = 18.0, ymax = 21.0)
+
+# DOWNLOAD FUNCTION
+download_region <- function(region, start_year, end_year) {
+  pars       <- c("T2M", "T2M_MIN", "T2M_MAX", "PRECTOTCORR")
+  lonlat_vec <- c(region$xmin, region$ymin, region$xmax, region$ymax)
+  
+  yearly_list <- lapply(start_year:end_year, function(yr) {
+    date_start <- sprintf("%d-01-01", yr)
+    date_end   <- sprintf("%d-12-31", yr)
+    
+    par_list <- lapply(pars, function(p) {
+      tryCatch({
+        get_power(community = "ag", lonlat = lonlat_vec, pars = p,
+                  dates = c(date_start, date_end), temporal_api = "daily")
+      }, error = function(e) {
+        get_power(community = "ag",
+                  lonlat = c(mean(c(region$xmin, region$xmax)),
+                             mean(c(region$ymin, region$ymax))),
+                  pars = p, dates = c(date_start, date_end), temporal_api = "daily")
+      })
+    })
+    
+    key_cols <- intersect(c("YEAR", "MM", "DD", "DOY", "LAT", "LON"),
+                          names(par_list[[1]]))
+    base <- par_list[[1]]
+    for (i in 2:length(pars)) {
+      base <- merge(base, par_list[[i]][, c(key_cols, pars[i])],
+                    by = key_cols, all.x = TRUE)
+    }
+    base
+  })
+  
+  do.call(rbind, yearly_list)
+}
+
+west_data <- rbind(raw_west_north, raw_west_south)
+east_data <- rbind(raw_east_north, raw_east_south)
+
+# SPATIAL AVERAGE to DAILY
+to_daily <- function(df) {
+  df$date <- as.Date(paste(df$YEAR, df$MM, df$DD, sep = "-"))
+  aggregate(cbind(T2M, T2M_MIN, T2M_MAX, PRECTOTCORR) ~ date,
+            data = df, FUN = mean, na.rm = TRUE)
+}
+
+west_daily <- to_daily(west_data)
+east_daily <- to_daily(east_data)
+
+# ASSIGN WEEK (Friday start)
+to_week_start <- function(dates) {
+  dates - (as.numeric(format(dates, "%w")) - 5) %% 7
+}
+
+west_daily$week_start <- to_week_start(west_daily$date)
+east_daily$week_start <- to_week_start(east_daily$date)
+
+# AGGREGATE TO WEEKLY
+# Temperature: mean; Precipitation: sum; Min/Max: min and max respectively
+agg_weekly <- function(daily) {
+  temp     <- aggregate(cbind(T2M) ~ week_start,        data = daily, FUN = mean, na.rm = TRUE)
+  temp_min <- aggregate(cbind(T2M_MIN) ~ week_start,    data = daily, FUN = min,  na.rm = TRUE)
+  temp_max <- aggregate(cbind(T2M_MAX) ~ week_start,    data = daily, FUN = max,  na.rm = TRUE)
+  precip   <- aggregate(cbind(PRECTOTCORR) ~ week_start,data = daily, FUN = sum,  na.rm = TRUE)
+  
+  out <- merge(temp, temp_min, by = "week_start")
+  out <- merge(out,  temp_max, by = "week_start")
+  out <- merge(out,  precip,   by = "week_start")
+  out
+}
+
+west_weekly <- agg_weekly(west_daily)
+east_weekly <- agg_weekly(east_daily)
+
+names(west_weekly) <- c("Date", "temp_west", "temp_min_west", "temp_max_west", "precip_west")
+names(east_weekly) <- c("Date", "temp_east", "temp_min_east", "temp_max_east", "precip_east")
+
+# MERGE AND FILTER
+weather <- merge(west_weekly, east_weekly, by = "Date", all = TRUE)
+weather <- weather[weather$Date >= as.Date("2007-10-05") &
+                     weather$Date <= as.Date("2023-09-01"), ]
+weather <- weather[order(weather$Date), ]
+
+# EXTREME WEATHER SHOCKS (using min/max temps, summed precip)
+iqr_high_fence <- function(x) quantile(x, 0.75, na.rm=TRUE) + 1.5 * IQR(x, na.rm=TRUE)
+iqr_low_fence  <- function(x) quantile(x, 0.25, na.rm=TRUE) - 1.5 * IQR(x, na.rm=TRUE)
+
+hot_west  <- weather$temp_max_west > iqr_high_fence(weather$temp_max_west)
+cold_west <- weather$temp_min_west < iqr_low_fence(weather$temp_min_west)
+hot_east  <- weather$temp_max_east > iqr_high_fence(weather$temp_max_east)
+cold_east <- weather$temp_min_east < iqr_low_fence(weather$temp_min_east)
+rain_west <- weather$precip_west   > iqr_high_fence(weather$precip_west)
+rain_east <- weather$precip_east   > iqr_high_fence(weather$precip_east)
+
+weather$extreme_weather <- as.integer(
+  hot_west | cold_west | hot_east | cold_east | rain_west | rain_east
+)
+
+# SAVE
+write.csv(weather, "weather_vars.csv", row.names = FALSE)
