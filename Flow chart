@@ -1,0 +1,57 @@
+library(ggplot2)
+library(ggforce)
+
+
+boxes <- data.frame(
+  x = c(1, 2.5, 4, 5.5),
+  y = c(0, 0, 0, 0),
+  label = c("Higher\nwait time", "Decreased\navailability", "Higher\nimport price", "Higher\nretail price"),
+  fill  = c("#FBEAF0", "#FBEAF0", "#E1F5EE", "#E1F5EE"),
+  color = c("#993556", "#993556", "#0F6E56", "#0F6E56")
+)
+
+arrows <- data.frame(
+  x    = c(1.45, 2.95, 4.45),
+  xend = c(1.95, 3.45, 4.95),
+  y    = c(0, 0, 0),
+  yend = c(0, 0, 0)
+)
+
+flow <- ggplot() +
+  annotate("segment", x = 0.58, xend = 2.92, y = 0.55, yend = 0.55,
+           color = "grey40", linewidth = 0.4) +
+  annotate("segment", x = 0.58, xend = 0.58, y = 0.55, yend = 0.47,
+           color = "grey40", linewidth = 0.4) +
+  annotate("segment", x = 2.92, xend = 2.92, y = 0.55, yend = 0.47,
+           color = "grey40", linewidth = 0.4) +
+  annotate("text", x = 1.75, y = 0.63, label = "Supply shock",
+           size = 3.2, fontface = "italic", color = "grey30") +
+  
+  annotate("segment", x = 3.08, xend = 5.92, y = 0.55, yend = 0.55,
+           color = "grey40", linewidth = 0.4) +
+  annotate("segment", x = 3.08, xend = 3.08, y = 0.55, yend = 0.47,
+           color = "grey40", linewidth = 0.4) +
+  annotate("segment", x = 5.92, xend = 5.92, y = 0.55, yend = 0.47,
+           color = "grey40", linewidth = 0.4) +
+  annotate("text", x = 4.5, y = 0.63, label = "Passthrough effect",
+           size = 3.2, fontface = "italic", color = "grey30") +
+  
+  geom_rect(data = boxes,
+            aes(xmin = x - 0.42, xmax = x + 0.42,
+                ymin = y - 0.3,  ymax = y + 0.3,
+                fill = fill, color = color),
+            linewidth = 0.5, radius = unit(8, "pt")) +
+  scale_fill_identity() +
+  scale_color_identity() +
+  geom_text(data = boxes,
+            aes(x = x, y = y, label = label, color = color),
+            size = 3.5, fontface = "bold", lineheight = 0.9) +
+  geom_segment(data = arrows,
+               aes(x = x, xend = xend, y = y, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+               color = "grey40", linewidth = 0.6) +
+  theme_void() +
+  coord_fixed(ratio = 1)
+
+ggsave("/Users/nickcampolo/Desktop/flow.pdf",
+       plot = flow, width = 7, height = 2, device = "pdf")
