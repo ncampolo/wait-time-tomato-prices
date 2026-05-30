@@ -1,0 +1,77 @@
+library(tidyverse)
+library(lubridate)
+
+wait_times <- read_csv("/Users/nickcampolo/all_vars.csv")
+
+# Plot
+wait_otay <- ggplot(wait_times, aes(x = week_start_date, y = avg_wait_otay / 60)) +
+  geom_line(color = "#800000", linewidth = 0.4) +
+  scale_x_date(
+    breaks = seq(as.Date("2007-10-05"), as.Date("2023-09-01"), by = "3 years"),
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Average Northbound Wait Times in Commercial Lanes,\n Otay Mesa, CA",
+    x = NULL,
+    y = "Average Wait Time (hours)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text       = element_text(size = 12),
+    panel.spacing    = unit(1.5, "lines"),
+    plot.title       = element_text(hjust = 0.5, size = 13),
+    axis.text.x      = element_text(angle = 45, hjust = 1)
+  )
+
+ggsave("/Users/nickcampolo/Desktop/wait_time_plot_otay.pdf",
+       plot = wait_otay, width = 6, height = 4, device = "pdf")
+
+
+# Plot
+wait_nogales <- ggplot(wait_times, aes(x = week_start_date, y = avg_wait_nogales / 60)) +
+  geom_line(color = "#800000", linewidth = 0.4) +
+  scale_x_date(
+    breaks = seq(as.Date("2007-10-05"), as.Date("2023-09-01"), by = "3 years"),
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Average Northbound Wait Times in Commercial Lanes,\n Nogales, AZ",
+    x = NULL,
+    y = "Average Wait Time (hours)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text       = element_text(size = 12),
+    panel.spacing    = unit(1.5, "lines"),
+    plot.title       = element_text(hjust = 0.5, size = 13),
+    axis.text.x      = element_text(angle = 45, hjust = 1)
+  )
+
+ggsave("/Users/nickcampolo/Desktop/wait_time_plot_nogales.pdf",
+       plot = wait_nogales, width = 6, height = 4, device = "pdf")
+
+
+# Plot
+wait_laredo <- ggplot(wait_times, aes(x = week_start_date, y = avg_wait_laredo / 60)) +
+  geom_line(color = "#800000", linewidth = 0.4) +
+  scale_x_date(
+    breaks = seq(as.Date("2007-10-05"), as.Date("2023-09-01"), by = "3 years"),
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Average Northbound Wait Times in Commercial Lanes,\n Laredo, TX",
+    x = NULL,
+    y = "Average Wait Time (hours)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text       = element_text(size = 12),
+    panel.spacing    = unit(1.5, "lines"),
+    plot.title       = element_text(hjust = 0.5, size = 13),
+    axis.text.x      = element_text(angle = 45, hjust = 1)
+  )
+
+ggsave("/Users/nickcampolo/Desktop/wait_time_plot_laredo.pdf",
+       plot = wait_laredo, width = 6, height = 4, device = "pdf")
+
+
