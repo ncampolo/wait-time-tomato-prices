@@ -1,0 +1,68 @@
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+
+FILE <- '/Users/nickcampolo/Desktop/Thesis Data/Border Wait Times/2025-059512 Multiple Ports BWT (100107-093023) (1).xlsx'
+
+
+read_port <- function(sheet, skip_rows) {
+  df <- read_excel(FILE, sheet = sheet, skip = skip_rows, col_names = FALSE)
+  
+  # Col layout: [1] port name  [2] date  [3:26] hours 0-23
+  df <- df %>%
+    rename(port = 1, date = 2) %>%
+    # Keep only rows that have a valid date
+    filter(!is.na(date)) %>%
+    mutate(date = as.Date(date))
+  
+  hour_cols <- names(df)[3:ncol(df)]
+  
+  df %>%
+    rowwise() %>%
+    mutate(daily_avg = mean(c_across(all_of(hour_cols)), na.rm = TRUE)) %>%
+    ungroup() %>%
+    select(date, daily_avg)
+}
+
+nogales_raw <- read_port("Nogalas--Marisposa", skip_rows = 3)
+
+otay_raw <- read_port("Otay Mesa", skip_rows = 3)
+
+laredo_raw <- read_port("LAREDO-All Site", skip_rows = 4) %>%
+  group_by(date) %>%
+  summarise(daily_avg = mean(daily_avg, na.rm = TRUE), .groups = "drop")
+
+# Aggregate to weekly averages
+
+date_start <- as.Date("2007-10-05")
+date_end   <- as.Date("2023-09-01")
+
+weekly_avg <- function(df, col_name) {
+  df %>%
+    filter(date >= date_start, date <= date_end) %>%
+    mutate(
+      # Snap each day back to its most recent Friday (weekday 5 in R = Friday)
+      week_friday = date - ((as.integer(format(date, "%u")) - 5) %% 7)
+    ) %>%
+    group_by(week_friday) %>%
+    summarise(!!col_name := mean(daily_avg, na.rm = TRUE), .groups = "drop") %>%
+    rename(Date = week_friday)
+}
+
+nogales_wk <- weekly_avg(nogales_raw, "avg_wait_nogales")
+otay_wk    <- weekly_avg(otay_raw,    "avg_wait_otay")
+laredo_wk  <- weekly_avg(laredo_raw,  "avg_wait_laredo")
+
+# Merge all three on Date 
+
+merged <- nogales_wk %>%
+  full_join(otay_wk,    by = "Date") %>%
+  full_join(laredo_wk,  by = "Date") %>%
+  arrange(Date)
+
+# Write output
+
+merged$Date <- format(merged$Date, "%Y-%m-%d")
+write.csv(merged, "border_wait_times_weekly.csv", row.names = FALSE)
+
